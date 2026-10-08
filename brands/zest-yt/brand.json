@@ -1,0 +1,42 @@
+{
+  "name": "Zest YouTube",
+  "font": {
+    "family": "Montserrat",
+    "file": "brand/fonts/Montserrat-latin.woff2",
+    "weight": "400 800"
+  },
+  "colors": {
+    "background": "#FFF9E6",
+    "text": "#333333",
+    "muted": "#5A5A5A",
+    "emphasis": "#DE4866",
+    "kicker": "#F4A911",
+    "literal": "#FDE233"
+  },
+  "logo": {
+    "full": "brand/logo/zest-logo-full.png",
+    "mark": "brand/logo/zest-mark.png",
+    "layers": "brand/logo/layers.json",
+    "dir": "brand/logo/",
+    "mark_parts": "brand/logo/mark.json"
+  },
+  "sting": {
+    "open": {
+      "seconds": 3.6,
+      "tagline": false
+    },
+    "close": {
+      "seconds": 4.8,
+      "tagline": true
+    },
+    "tagline": "A fresh perspective",
+    "audio": "brand/sting.mp3",
+    "timeScale": 2
+  },
+  "watermark": {
+    "src": "brand/logo/zest-mark.png",
+    "width": 72,
+    "opacity": 0.6,
+    "position": "bottom-right"
+  }
+}

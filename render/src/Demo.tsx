@@ -9,6 +9,7 @@ import {
   staticFile,
   useCurrentFrame,
 } from 'remotion';
+import {BrandFont, BrandSlide, BrandTheme, Sting, Watermark} from './Brand';
 
 export const FPS = 30;
 const HOLD_AFTER_AUDIO = 0.7; // seconds of breathing room after each narration line
@@ -56,10 +57,11 @@ export type SlideNarration = {
 export type IntroSlide = SlideNarration & {
   title: string;
   subtitle?: string;
+  kicker?: string; // short ALL-CAPS label above the title (branded slides)
   screenshot?: string;
   layout?: 'stacked' | 'split';
 };
-export type OutroSlide = SlideNarration & {title: string; subtitle?: string; url?: string};
+export type OutroSlide = SlideNarration & {title: string; subtitle?: string; url?: string; kicker?: string};
 
 export type Scene = {
   id: string;
@@ -88,6 +90,8 @@ export type Storyboard = {
   caption?: CaptionStyle;
   intro?: IntroSlide;
   outro?: OutroSlide;
+  theme?: string; // brand profile name (brands/<theme>/), loaded by Root
+  brandTheme?: BrandTheme;
   scenes: Scene[];
 };
 
@@ -118,8 +122,17 @@ const slideFramesFor = (slide?: SlideNarration): number =>
     : slideFrames;
 export const introFrames = (sb: Storyboard): number => (sb.intro ? slideFramesFor(sb.intro) : 0);
 export const outroFrames = (sb: Storyboard): number => (sb.outro ? slideFramesFor(sb.outro) : 0);
+// Brand stings: logo reveal before the intro card, logo + tagline after the outro.
+export const stingOpenFrames = (sb: Storyboard): number =>
+  sb.brandTheme?.sting?.open ? Math.round(sb.brandTheme.sting.open.seconds * FPS) : 0;
+export const stingCloseFrames = (sb: Storyboard): number =>
+  sb.brandTheme?.sting?.close ? Math.round(sb.brandTheme.sting.close.seconds * FPS) : 0;
 export const totalFrames = (sb: Storyboard): number =>
-  introFrames(sb) + sb.scenes.reduce((sum, s) => sum + sceneFrames(s), 0) + outroFrames(sb);
+  stingOpenFrames(sb) +
+  introFrames(sb) +
+  sb.scenes.reduce((sum, s) => sum + sceneFrames(s), 0) +
+  outroFrames(sb) +
+  stingCloseFrames(sb);
 
 const Cursor: React.FC<{scale: number}> = ({scale}) => (
   <svg
@@ -709,7 +722,8 @@ const SceneView: React.FC<{
   audio: boolean;
   captionStyle: CaptionStyle;
   brand: string;
-}> = ({scene, prev, layout, captions, audio, captionStyle, brand}) => {
+  theme?: BrandTheme;
+}> = ({scene, prev, layout, captions, audio, captionStyle, brand, theme}) => {
   const content =
     scene.media === 'clip' ? <ClipScene scene={scene} /> : <StillScene scene={scene} prev={prev} />;
 
@@ -725,6 +739,7 @@ const SceneView: React.FC<{
       ) : (
         content
       )}
+      {theme ? <Watermark theme={theme} /> : null}
       {captions ? (
         <Caption
           text={scene.script}
@@ -769,12 +784,14 @@ const SlideNarrationLayer: React.FC<{
 
 // One black overlay for the whole piece: reveals over the first TOPTAIL frames,
 // closes over the last TOPTAIL. Replaces the per-scene fades that caused the flash.
-const TopTail: React.FC<{total: number}> = ({total}) => {
+// A brand sting opens on its own cream surface, so it skips the fade-in (the
+// fade would hide the first half of the logo reveal).
+const TopTail: React.FC<{total: number; fadeIn?: boolean}> = ({total, fadeIn = true}) => {
   const frame = useCurrentFrame();
   const opacity = interpolate(
     frame,
     [0, TOPTAIL, total - TOPTAIL, total],
-    [1, 0, 0, 1],
+    [fadeIn ? 1 : 0, 0, 0, 1],
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
   return <AbsoluteFill style={{backgroundColor: '#000', opacity, pointerEvents: 'none'}} />;
@@ -794,15 +811,49 @@ export const Demo: React.FC<{
   // Precedence: per-render caption overrides > storyboard.caption. Accent stays
   // unset by default so captions use the readable dark pill; brand tints slides,
   // and a caption accent is opt-in (e.g. a branded 'bar' theme).
-  const captionStyle: CaptionStyle = {...storyboard.caption, ...caption};
+  const theme = storyboard.brandTheme;
+  const captionStyle: CaptionStyle = {
+    ...(theme?.colors.literal ? {literalColor: theme.colors.literal} : {}),
+    ...storyboard.caption,
+    ...caption,
+  };
   const total = totalFrames(storyboard);
-  let cursor = introFrames(storyboard);
+  const openSting = stingOpenFrames(storyboard);
+  let cursor = openSting + introFrames(storyboard);
+  const slide = (kind: 'intro' | 'outro') => {
+    const s = kind === 'intro' ? storyboard.intro : storyboard.outro;
+    if (!s) return null;
+    return theme ? (
+      <BrandSlide
+        theme={theme}
+        kind={kind}
+        title={s.title}
+        subtitle={s.subtitle}
+        kicker={s.kicker}
+        url={kind === 'outro' ? storyboard.outro?.url : undefined}
+        screenshot={kind === 'intro' ? storyboard.intro?.screenshot : undefined}
+        vertical={layout === 'vertical'}
+        narrated={Boolean(s.audio)}
+        captionPosition={captionStyle.position}
+      />
+    ) : kind === 'intro' ? (
+      <SlideView kind="intro" intro={storyboard.intro} brand={brand} layout={layout} captionPosition={captionStyle.position} />
+    ) : (
+      <SlideView kind="outro" outro={storyboard.outro} brand={brand} layout={layout} captionPosition={captionStyle.position} />
+    );
+  };
 
   return (
     <AbsoluteFill style={{backgroundColor: '#0f172a'}}>
+      {theme ? <BrandFont theme={theme} /> : null}
+      {theme && openSting ? (
+        <Sequence from={0} durationInFrames={openSting}>
+          <Sting theme={theme} tagline={theme.sting?.open?.tagline} />
+        </Sequence>
+      ) : null}
       {storyboard.intro ? (
-        <Sequence from={0} durationInFrames={introFrames(storyboard)}>
-          <SlideView kind="intro" intro={storyboard.intro} brand={brand} layout={layout} captionPosition={captionStyle.position} />
+        <Sequence from={openSting} durationInFrames={introFrames(storyboard)}>
+          {slide('intro')}
           <SlideNarrationLayer
             slide={storyboard.intro}
             layout={layout}
@@ -828,6 +879,7 @@ export const Demo: React.FC<{
               audio={audio}
               captionStyle={captionStyle}
               brand={brand}
+              theme={theme}
             />
           </Sequence>
         );
@@ -835,7 +887,7 @@ export const Demo: React.FC<{
 
       {storyboard.outro ? (
         <Sequence from={cursor} durationInFrames={outroFrames(storyboard)}>
-          <SlideView kind="outro" outro={storyboard.outro} brand={brand} layout={layout} captionPosition={captionStyle.position} />
+          {slide('outro')}
           <SlideNarrationLayer
             slide={storyboard.outro}
             layout={layout}
@@ -847,7 +899,13 @@ export const Demo: React.FC<{
         </Sequence>
       ) : null}
 
-      <TopTail total={total} />
+      {theme && stingCloseFrames(storyboard) ? (
+        <Sequence from={cursor + outroFrames(storyboard)} durationInFrames={stingCloseFrames(storyboard)}>
+          <Sting theme={theme} tagline={theme.sting?.close?.tagline} />
+        </Sequence>
+      ) : null}
+
+      <TopTail total={total} fadeIn={!(theme && openSting)} />
     </AbsoluteFill>
   );
 };

@@ -15,7 +15,7 @@
 //                    narration.mp3  timeline-aligned narration track
 //                    captions.srt   subtitles matching the same timeline
 import {execFileSync} from 'node:child_process';
-import {existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
 
 const args = process.argv.slice(2);
 const project = args.find((a) => !a.startsWith('--'));
@@ -43,6 +43,22 @@ const caption = Object.fromEntries(Object.entries(captionOverride).filter(([, v]
 const comp = vertical ? 'DemoVertical' : 'Demo';
 const publicDir = `projects/${project}/assets`;
 const outDir = `projects/${project}/out`;
+
+// Brand profile: storyboard.theme names brands/<theme>/; mirror it into the
+// project's public dir as brand/ so the renderer can load logo, font and sting.
+{
+  const sbTheme = JSON.parse(readFileSync(`${publicDir}/storyboard.json`, 'utf8')).theme;
+  if (sbTheme) {
+    const src = `brands/${sbTheme}`;
+    if (!existsSync(`${src}/brand.json`)) {
+      console.error(`theme "${sbTheme}" not found: expected ${src}/brand.json`);
+      process.exit(1);
+    }
+    rmSync(`${publicDir}/brand`, {recursive: true, force: true});
+    cpSync(src, `${publicDir}/brand`, {recursive: true});
+    console.log(`brand: ${sbTheme}`);
+  }
+}
 
 // Mirror of the renderer's timing math (Demo.tsx) - keep in sync.
 const HOLD_AFTER_AUDIO = 0.7;

@@ -3,7 +3,8 @@
 // its duration with ffprobe, and writes audio/audioDuration back into the
 // storyboard.
 //
-// Voice chain: ElevenLabs (ELEVENLABS_API_KEY in .env) -> Piper if installed
+// Voice chain: ElevenLabs (ELEVENLABS_API_KEY in .env) -> OpenRouter
+// (OPENROUTER_API_KEY in .env, /api/v1/audio/speech) -> Piper if installed
 // (free, offline, cross-platform: `pip install piper-tts`) -> macOS `say`
 // placeholder -> error with install instructions.
 //
@@ -26,6 +27,15 @@ const API_KEY = process.env.ELEVENLABS_API_KEY;
 const PIPER_MODEL = process.env.PIPER_MODEL ?? 'en_US-lessac-medium';
 const STABILITY = process.env.ELEVENLABS_STABILITY ?? '0.45';
 const SIMILARITY = process.env.ELEVENLABS_SIMILARITY ?? '0.75';
+const OR_API_KEY = process.env.OPENROUTER_API_KEY;
+// Any model from https://openrouter.ai/api/v1/models?output_modalities=speech;
+// voice names come from that model's `supported_voices`.
+const OR_MODEL = process.env.OPENROUTER_TTS_MODEL ?? 'elevenlabs/eleven-multilingual-v2';
+const OR_VOICE = process.env.OPENROUTER_TTS_VOICE ?? 'george';
+// Optional delivery guidance (tone, pacing) - honoured by Gemini and OpenAI TTS.
+const OR_INSTRUCTIONS = process.env.OPENROUTER_TTS_INSTRUCTIONS ?? '';
+// Gemini TTS only returns raw PCM (24 kHz mono s16le); everything else does mp3.
+const OR_PCM = /^google\//.test(OR_MODEL);
 
 const args = process.argv.slice(2);
 const project = args.find((a) => !a.startsWith('--'));
@@ -52,6 +62,8 @@ const hasPiper = (() => {
 
 const engine = API_KEY
   ? 'elevenlabs'
+  : OR_API_KEY
+    ? 'openrouter'
   : hasPiper
     ? 'piper'
     : process.platform === 'darwin'
@@ -61,7 +73,7 @@ const engine = API_KEY
 if (!engine) {
   console.error(
     'No voice available. Either:\n' +
-      '  - add ELEVENLABS_API_KEY=... to a .env file in this folder, or\n' +
+      '  - add ELEVENLABS_API_KEY=... (or OPENROUTER_API_KEY=...) to a .env file in this folder, or\n' +
       '  - install Piper (free, offline): pip install piper-tts',
   );
   process.exit(1);
@@ -70,12 +82,15 @@ if (!engine) {
 const voiceSig =
   engine === 'elevenlabs'
     ? `elevenlabs:${VOICE_ID}:${MODEL_ID}:${STABILITY}:${SIMILARITY}`
+    : engine === 'openrouter'
+      ? `openrouter:${OR_MODEL}:${OR_VOICE}:${OR_INSTRUCTIONS}`
     : engine === 'piper'
       ? `piper:${PIPER_MODEL}`
       : 'say';
 
 const labels = {
   elevenlabs: `ElevenLabs (voice ${VOICE_ID})`,
+  openrouter: `OpenRouter (${OR_MODEL}, voice ${OR_VOICE})`,
   piper: `Piper (${PIPER_MODEL}, offline)`,
   say: 'macOS say fallback (placeholder voice)',
 };
@@ -134,6 +149,35 @@ const elevenlabs = async (text, outFile) => {
   return wordsFromAlignment(data.alignment);
 };
 
+// OpenRouter's speech endpoint returns raw audio bytes with no alignment, so
+// like Piper/say it returns null and captions stay static.
+const openrouter = async (text, outFile) => {
+  const res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+    method: 'POST',
+    headers: {Authorization: `Bearer ${OR_API_KEY}`, 'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      model: OR_MODEL,
+      input: text,
+      voice: OR_VOICE,
+      response_format: OR_PCM ? 'pcm' : 'mp3',
+      ...(OR_INSTRUCTIONS ? {instructions: OR_INSTRUCTIONS} : {}),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`OpenRouter ${res.status}: ${await res.text()}`);
+  }
+  const audio = Buffer.from(await res.arrayBuffer());
+  if (!OR_PCM) {
+    await writeFile(outFile, audio);
+    return null;
+  }
+  const pcm = outFile.replace(/\.mp3$/, '.pcm');
+  await writeFile(pcm, audio);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcm, outFile]);
+  rmSync(pcm, {force: true});
+  return null;
+};
+
 // Piper/say don't emit word timings, so they return null: captions stay static
 // on the free voices (karaoke word-highlight is an ElevenLabs-only feature).
 const piper = (text, outFile) => {
@@ -158,11 +202,23 @@ const macSay = (text, outFile) => {
   return null;
 };
 
-const synth = {elevenlabs, piper, say: macSay}[engine];
+const synth = {elevenlabs, openrouter, piper, say: macSay}[engine];
 
 // Narratable units: every scene, plus the intro/outro slides when they carry a
 // script (the renderer starts slide audio slightly after the card appears and
 // holds the slide until the line finishes).
+// Optional projects/<project>/pronounce.json: {"IT": "I.T."} - whole-word,
+// case-sensitive substitutions applied to the SPOKEN text only, so captions
+// keep the on-screen spelling while the voice says it right.
+const pronouncePath = path.resolve('projects', project, 'pronounce.json');
+const pronounce = existsSync(pronouncePath) ? JSON.parse(readFileSync(pronouncePath, 'utf8')) : {};
+const escapeRe = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const spoken = (text) =>
+  Object.entries(pronounce).reduce(
+    (t, [from, to]) => t.replace(new RegExp(`(?<![\\w])${escapeRe(from)}(?![\\w])`, 'g'), to),
+    text,
+  );
+
 const units = [
   ...(storyboard.intro?.script ? [{id: 'intro-slide', obj: storyboard.intro}] : []),
   ...storyboard.scenes.map((scene) => ({id: scene.id, obj: scene})),
@@ -174,7 +230,7 @@ for (const {id, obj: scene} of units) {
   const outFile = path.join(assetsDir, rel);
   const sigFile = `${outFile}.sig`;
   const wordsFile = `${outFile}.words.json`; // per-word timings cached beside the audio
-  const sig = createHash('sha256').update(`${voiceSig}\n${scene.script}`).digest('hex');
+  const sig = createHash('sha256').update(`${voiceSig}\n${spoken(scene.script)}`).digest('hex');
 
   const force = redo.has('all') || redo.has(id);
   const cached =
@@ -182,7 +238,7 @@ for (const {id, obj: scene} of units) {
 
   let words = null;
   if (!cached) {
-    words = await synth(scene.script, outFile);
+    words = await synth(spoken(scene.script), outFile);
     await writeFile(sigFile, sig);
     if (words) await writeFile(wordsFile, JSON.stringify(words));
     else rmSync(wordsFile, {force: true}); // drop stale timings if the voice changed
