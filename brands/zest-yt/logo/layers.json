@@ -1,0 +1,51 @@
+{
+ "width": 2843,
+ "height": 756,
+ "layers": [
+  {
+   "name": "letter-z",
+   "file": "letter-z.png",
+   "x": 910,
+   "y": 173,
+   "w": 480,
+   "h": 556,
+   "z": 0
+  },
+  {
+   "name": "letter-e",
+   "file": "letter-e.png",
+   "x": 1429,
+   "y": 165,
+   "w": 504,
+   "h": 577,
+   "z": 1
+  },
+  {
+   "name": "letter-s",
+   "file": "letter-s.png",
+   "x": 1982,
+   "y": 165,
+   "w": 492,
+   "h": 575,
+   "z": 2
+  },
+  {
+   "name": "letter-t",
+   "file": "letter-t.png",
+   "x": 2534,
+   "y": 15,
+   "w": 287,
+   "h": 725,
+   "z": 3
+  },
+  {
+   "name": "letter-t-accent",
+   "file": "letter-t-accent.png",
+   "x": 2695,
+   "y": 151,
+   "w": 148,
+   "h": 146,
+   "z": 4
+  }
+ ]
+}
