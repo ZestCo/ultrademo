@@ -41,6 +41,10 @@ await mkdir(recDir, {recursive: true});
 // With `profile: '<name>'` in the flow, capture reuses a persistent browser
 // profile created by `npm run login -- <name> <url>` (auth handoff for apps
 // with SSO or sessions you can't script). Otherwise a clean browser launches.
+// Chrome's back/forward cache can leave a tab that never paints again after a
+// click-driven full-page navigation (seen on Freshservice's classic admin pages:
+// screenshots and the recording freeze). Disabling it costs nothing for capture.
+const BROWSER_ARGS = ['--disable-features=BackForwardCache'];
 const contextOptions = {
   viewport: VIEWPORT,
   deviceScaleFactor: 2,
@@ -63,13 +67,14 @@ if (flow.profile) {
     path.resolve('.profiles', flow.profile),
     {
       headless: true,
+      args: BROWSER_ARGS,
       channel: flow.channel,
       ...(flow.realKeychain ? {ignoreDefaultArgs: ['--use-mock-keychain']} : {}),
       ...contextOptions,
     },
   );
 } else {
-  browser = await chromium.launch();
+  browser = await chromium.launch({args: BROWSER_ARGS});
   context = await browser.newContext(contextOptions);
 }
 
@@ -103,9 +108,13 @@ if (flow.inject) {
   await context.addInitScript({content: flow.inject});
 }
 
-const page = context.pages()[0] ?? (await context.newPage());
-const video = page.video();
-const videoStart = Date.now();
+let page = context.pages()[0] ?? (await context.newPage());
+let video = page.video();
+let videoStart = Date.now();
+// Recording segments: a scene with `freshPage: true` continues in a new tab (and a
+// new recording file) - for apps whose tab stops painting after some action, e.g.
+// a full-page form POST. Each clip is sliced from its own segment's recording.
+const segments = [];
 
 // Shared scratch space flow hooks can use to pass values between scenes
 // (e.g. a generated link consumed by a later phone-frame scene).
@@ -132,12 +141,14 @@ const makeRecorder = (clipStart, seedPos) => {
     return {x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2)};
   };
 
-  const moveTo = async (to) => {
+  const moveTo = async (to, fixedMs) => {
     const dist = Math.hypot(to.x - cur.x, to.y - cur.y);
     if (dist < 2) return;
-    const durMs = Math.min(900, Math.max(350, dist * 0.8));
+    const durMs = fixedMs ?? Math.min(900, Math.max(350, dist * 0.8));
     events.push({t: now(), type: 'move', x: cur.x, y: cur.y});
-    const steps = Math.max(8, Math.round(durMs / 25));
+    // Fixed-duration moves (narration-timed scenes) use fewer, larger steps so a
+    // busy page can't stretch them.
+    const steps = fixedMs ? Math.max(6, Math.round(durMs / 45)) : Math.max(8, Math.round(durMs / 25));
     for (let i = 1; i <= steps; i++) {
       const e = easeInOut(i / steps);
       await page.mouse.move(cur.x + (to.x - cur.x) * e, cur.y + (to.y - cur.y) * e);
@@ -153,6 +164,16 @@ const makeRecorder = (clipStart, seedPos) => {
     position: () => ({...cur}),
     pause: (ms) => page.waitForTimeout(ms),
     moveTo: async (selector) => moveTo(await centerOf(selector)),
+    // Point-level primitives for canvas drags (e.g. drag-and-drop workflow
+    // builders): moveToPoint eases the cursor, down/up press and release.
+    moveToPoint: async (pt, ms) => moveTo({x: Math.round(pt.x), y: Math.round(pt.y)}, ms),
+    // Resolve an element's on-screen centre without moving (for pre-planned moves).
+    centerOf: async (selector) => centerOf(selector),
+    down: async () => {
+      events.push({t: now(), type: 'click', x: cur.x, y: cur.y});
+      await page.mouse.down();
+    },
+    up: async () => page.mouse.up(),
     click: async (selector) => {
       await moveTo(await centerOf(selector));
       await page.waitForTimeout(180);
@@ -267,6 +288,16 @@ for (const scene of flow.scenes) {
     continue;
   }
 
+  if (scene.freshPage) {
+    const old = page;
+    segments.push({video, start: videoStart, end: Date.now(), rotated: true});
+    page = await context.newPage();
+    video = page.video();
+    videoStart = Date.now();
+    await Promise.race([old.close(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => {});
+    console.log(`  ${scene.id}: continuing in a fresh tab`);
+  }
+
   if (scene.prepare) await scene.prepare(page, ctx);
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(scene.settleMs ?? 400);
@@ -280,11 +311,15 @@ for (const scene of flow.scenes) {
     const clipEnd = Date.now();
 
     const file = `captures/${scene.id}.png`;
-    await page.screenshot({path: path.join(assetsDir, file)});
+    // `freezeFromClip`: the tab may not paint any more (see freshPage), so take the
+    // end-state freeze frame from the clip's last frame after slicing instead.
+    if (!scene.freezeFromClip) await shot(page, path.join(assetsDir, file));
 
     const skipTotal = rec.skips.reduce((a, [s, e]) => a + (e - s), 0);
     const clipDuration = Number(((clipEnd - clipStart) / 1000 - skipTotal).toFixed(3));
     clipJobs.push({
+      seg: segments.length,
+      freezeFromClip: !!scene.freezeFromClip,
       id: scene.id,
       start: (clipStart - videoStart) / 1000,
       end: (clipEnd - videoStart) / 1000,
@@ -321,7 +356,7 @@ for (const scene of flow.scenes) {
     }
 
     const file = `captures/${scene.id}.png`;
-    await page.screenshot({path: path.join(assetsDir, file)});
+    await shot(page, path.join(assetsDir, file));
     scenes.push({
       id: scene.id,
       media: 'still',
@@ -343,12 +378,31 @@ for (const scene of flow.scenes) {
   if (scene.after) await scene.after(page, ctx);
 }
 
+const videoEnd = Date.now();
+segments.push({video, start: videoStart, end: videoEnd});
 await context.close(); // flushes the session recording to disk
 if (browser) await browser.close();
 
 // Slice per-scene clips out of the session recording (skip windows removed).
 if (clipJobs.length) {
-  const videoPath = await video.path();
+  for (const [i, seg] of segments.entries()) {
+    seg.path = await seg.video.path();
+    // The recording's timeline does not start exactly at the segment start (the
+    // encoder starts on the first painted frame), so slicing by wall-clock offsets
+    // alone shifts every clip. Measure the lag from the file's duration vs
+    // wall-clock and correct the slice points by it (capped: a tab that stopped
+    // painting can end its file early, which is not start lag).
+    const {stdout: probed} = await execFileP('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', seg.path]);
+    const recorded = Number.parseFloat(probed);
+    const wall = (seg.end - seg.start) / 1000;
+    // A rotated-out tab may have stopped painting, so its file can end early: no lag correction there.
+    const lag = !seg.rotated && Number.isFinite(recorded) ? Math.min(1, Math.max(0, wall - recorded)) : 0;
+    console.log(`recording ${i} lag: ${lag.toFixed(3)}s (wall ${wall.toFixed(2)}s, file ${Number.isFinite(recorded) ? recorded.toFixed(2) : '?'}s)`);
+    for (const job of clipJobs.filter((j) => j.seg === i)) {
+      job.start = Math.max(0, job.start - lag);
+      job.end = Math.max(job.start, job.end - lag);
+    }
+  }
   for (const job of clipJobs) {
     const total = job.end - job.start;
     const segs = [];
@@ -365,6 +419,7 @@ if (clipJobs.length) {
     );
     const concat = `${segs.map((_, i) => `[v${i}]`).join('')}concat=n=${segs.length}:v=1[out]`;
     const outFile = path.join(assetsDir, 'captures', `${job.id}.mp4`);
+    const videoPath = segments[job.seg].path;
     await execFileP('ffmpeg', [
       '-y',
       '-i',
@@ -386,6 +441,9 @@ if (clipJobs.length) {
       outFile,
     ]);
     console.log(`sliced ${job.id}.mp4`);
+    if (job.freezeFromClip) {
+      await execFileP('ffmpeg', ['-y', '-sseof', '-0.1', '-i', outFile, '-frames:v', '1', '-update', '1', path.join(assetsDir, 'captures', `${job.id}.png`)]);
+    }
   }
 }
 
@@ -416,3 +474,17 @@ await writeFile(
 );
 await (await import('node:fs/promises')).rename(`${sbOut}.tmp`, sbOut);
 console.log(`projects/${project}/assets/storyboard.json written with ${scenes.length} scenes`);
+
+// page.screenshot waits for web fonts; some pages never settle them. Fall back to a
+// raw CDP capture of the same viewport so a stuck font load can't kill the run.
+async function shot(pg, file) {
+  try {
+    await pg.screenshot({path: file, timeout: 15_000});
+  } catch (e) {
+    console.warn(`  screenshot fallback (CDP): ${String(e.message).split('\n')[0]}`);
+    const cdp = await pg.context().newCDPSession(pg);
+    const {data} = await cdp.send('Page.captureScreenshot', {format: 'png'});
+    (await import('node:fs')).writeFileSync(file, Buffer.from(data, 'base64'));
+    await cdp.detach();
+  }
+}

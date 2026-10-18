@@ -94,7 +94,8 @@ if (!engine) {
 
 const voiceSig =
   engine === 'openrouter'
-    ? `openrouter:${OPENROUTER_MODEL}:${OPENROUTER_VOICE}:${OPENROUTER_STYLE}:${OPENROUTER_INSTRUCTIONS}`
+    ? // same shape as earlier OpenRouter caches (model:voice:instructions), so they stay warm
+      `openrouter:${OPENROUTER_MODEL}:${OPENROUTER_VOICE}:${OPENROUTER_INSTRUCTIONS}${OPENROUTER_STYLE ? `:${OPENROUTER_STYLE}` : ''}`
     : engine === 'elevenlabs'
       ? `elevenlabs:${VOICE_ID}:${MODEL_ID}:${STABILITY}:${SIMILARITY}`
       : engine === 'piper'

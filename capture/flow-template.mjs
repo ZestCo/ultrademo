@@ -45,6 +45,8 @@ export default {
 
   // Optional presentation (all omittable; sensible defaults if absent):
   // brand: '#ffb224',                 // accent for slides + branded captions
+  // theme: 'zest-yt',                 // Zest videos: brand profile from brands/zest-yt/ (logo sting,
+  //                                   // branded title/closing cards, watermark, Montserrat)
   // caption: {theme: 'outline', size: 'md', position: 'bottom', highlight: 'dim'},
   //   // theme: 'outline' (default - light text + dark stroke, no box; over
   //   //   busy, text-dense screens prefer a background: 'pill' or 'bar')

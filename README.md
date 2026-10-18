@@ -16,7 +16,7 @@ Ultrademo is a capture-and-render pipeline plus a Claude Code skill that drives 
 
 ## Requirements
 
-- Node 20+ (22 recommended), macOS / Linux / Windows
+- Node 22 (`.nvmrc` pins it: `nvm install && nvm use`), macOS / Linux / Windows
 - ffmpeg + ffprobe (`brew install ffmpeg` / `apt install ffmpeg` / `winget install ffmpeg`)
 - Chromium for Playwright (`npx playwright install chromium`)
 - A voice, best-first: an [OpenRouter](https://openrouter.ai) API key in `.env` (see [below](#narration-via-openrouter)) → an [ElevenLabs](https://elevenlabs.io) API key in `.env` (premium) → [Piper](https://github.com/rhasspy/piper) (`pip install piper-tts` - free, offline, all platforms) → macOS `say` (zero-install placeholder). Unchanged narration lines are cached, so re-renders never re-bill your ElevenLabs quota.
@@ -121,6 +121,18 @@ No audio file is written for a failed line. If the API returns silent audio, tha
 **Karaoke captions.** Word-highlight captions (`caption: {highlight: 'wipe'}` in the flow, or `--caption-highlight=wipe` on render) need per-word timings. With OpenRouter, `tts` gets them by transcribing each newly voiced line once with word timestamps (`OPENROUTER_TIMING_MODEL`, default `fish-audio/transcribe-1`, about $0.003 per 30 seconds), then mapping those timings onto the script's own words. If the transcriber mishears a word, the caption still shows the script's spelling. Lines voiced before this existed get timings on the next `tts` run without being re-voiced. If the timing pass fails, `tts` prints a warning and that line's captions stay static; the audio is unaffected. Set `OPENROUTER_TIMING_MODEL=off` to skip it.
 
 **Keeping the fork current:** `git remote add upstream https://github.com/new-xp/ultrademo`, then `git fetch upstream && git merge upstream/main` and push. The OpenRouter changes are kept small (`tts/tts.mjs`, `scripts/doctor.mjs`, `.env.example`, the doctor script in `package.json`, this section, and the repo URL in the skill and install lines), so upstream updates should merge cleanly.
+
+## Zest brand profile
+
+Zest videos set `theme: 'zest-yt'` on the flow. `npm run render` then copies `brands/zest-yt/` into the project and adds:
+
+- an opening logo sting (the petals fan open) with the sting audio, and a closing sting with the "A fresh perspective" tagline;
+- branded title and closing cards in Montserrat on cream (`intro.kicker` sets the small label above the title);
+- the Zest mark as a corner watermark on every scene, and Zest yellow for UI literals in captions.
+
+Everything lives in `brands/zest-yt/`: `brand.json` (colours, font, sting timings, watermark), the logo layers, the font, `sting.mp3` (the chosen sting; `sting-options/` holds the alternatives) and `exports/` (the stings as standalone MP4s for other edits). A new brand is a new folder beside it with its own `brand.json`.
+
+Helper scripts for tight narration timing: `node scripts/pre-tts.mjs <project>` writes a script-only storyboard so `npm run tts` can voice the lines before capture, `node scripts/phrases.mjs <project>` prints where each line's phrases fall, `node scripts/scene-times.mjs <project>` prints each scene's start time in the render, and `scripts/sync-check.py` builds a contact sheet of frames at given moments. Per-project `pronounce.json` (`{"IT": "I.T."}`) changes what the voice says without changing the captions.
 
 ## What a flow can do
 
