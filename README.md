@@ -81,7 +81,7 @@ This fork can voice narration through [OpenRouter](https://openrouter.ai)'s spee
 
 1. Create a key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys), and add credit to the account. A 30-second demo costs well under a cent.
 2. Open `.env` in the workspace (the skill creates it from `.env.example` on first run, or run `cp .env.example .env`), and paste the key after `OPENROUTER_API_KEY=`.
-3. Run `npm run doctor`. It checks that the key works, that the account has credit, that the model exists, and that the voice can say a one-word test line. That test line costs a fraction of a cent.
+3. Run `npm run doctor`. It checks that the key works, that the account has credit, that the model and the word-timing model exist, and that the voice can say a one-word test line. That test line costs a fraction of a cent.
 
 From then on `npm run tts -- <project>` uses OpenRouter and prints `TTS: OpenRouter (<model>, voice <voice>)`.
 
@@ -93,6 +93,7 @@ From then on `npm run tts -- <project>` uses OpenRouter and prints `TTS: OpenRou
 | `OPENROUTER_TTS_MODEL` | `google/gemini-3.1-flash-tts-preview` | Speech model. It must return raw PCM, as Gemini TTS does. |
 | `OPENROUTER_TTS_VOICE` | `Gacrux` | The voice. |
 | `OPENROUTER_TTS_STYLE` | (none) | Optional delivery direction in plain words, e.g. `Calm, friendly British narrator, unhurried.` |
+| `OPENROUTER_TIMING_MODEL` | `fish-audio/transcribe-1` | Transcription model used for karaoke word timings. Any OpenRouter speech-to-text model that returns word timestamps works; `off` disables timings. |
 
 If the `OPENROUTER_API_KEY=` line is there but empty, `npm run tts` stops and asks for the key. It does not fall back to the robotic placeholder voice. To use the free Piper or `say` voice instead, delete the line.
 
@@ -117,7 +118,7 @@ TTS failed on line "s3-reports": Reports track how many tickets ...
 
 No audio file is written for a failed line. If the API returns silent audio, that counts as a failure. Fix the problem and run the same command again; lines voiced before the failure are already cached.
 
-Karaoke word-highlight captions need per-word timings, and only ElevenLabs provides them. With OpenRouter, captions are static, as they are with Piper.
+**Karaoke captions.** Word-highlight captions (`caption: {highlight: 'wipe'}` in the flow, or `--caption-highlight=wipe` on render) need per-word timings. With OpenRouter, `tts` gets them by transcribing each newly voiced line once with word timestamps (`OPENROUTER_TIMING_MODEL`, default `fish-audio/transcribe-1`, about $0.003 per 30 seconds), then mapping those timings onto the script's own words. If the transcriber mishears a word, the caption still shows the script's spelling. Lines voiced before this existed get timings on the next `tts` run without being re-voiced. If the timing pass fails, `tts` prints a warning and that line's captions stay static; the audio is unaffected. Set `OPENROUTER_TIMING_MODEL=off` to skip it.
 
 **Keeping the fork current:** `git remote add upstream https://github.com/new-xp/ultrademo`, then `git fetch upstream && git merge upstream/main` and push. The OpenRouter changes are kept small (`tts/tts.mjs`, `scripts/doctor.mjs`, `.env.example`, the doctor script in `package.json`, this section, and the repo URL in the skill and install lines), so upstream updates should merge cleanly.
 

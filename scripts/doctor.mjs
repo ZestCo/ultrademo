@@ -93,6 +93,11 @@ const checkOpenRouter = async (key) => {
     });
     if (test.ok && test.headers.get('content-type')?.startsWith('audio/')) ok('OpenRouter voice', `${voice} on ${model}`);
     else bad(`OpenRouter could not voice a test line with ${voice} on ${model} (${await why(test)})`, 'set OPENROUTER_TTS_VOICE in .env to a voice this model supports (see README)');
+    const timing = process.env.OPENROUTER_TIMING_MODEL || 'fish-audio/transcribe-1';
+    if (timing === 'off') info('OPENROUTER_TIMING_MODEL=off - no word timings, karaoke captions stay static');
+    else if ((await api(`models/${timing}/endpoints`)).status === 404)
+      bad(`OPENROUTER_TIMING_MODEL ${timing} not found`, 'pick a speech-to-text model at https://openrouter.ai/models?output_modalities=transcription, or set it to off');
+    else ok('OpenRouter word timings', `${timing}, for karaoke captions`);
     if (process.env.OPENROUTER_TTS_STYLE) info(`style direction: ${process.env.OPENROUTER_TTS_STYLE}`);
     if (process.env.ELEVENLABS_API_KEY) info('ELEVENLABS_API_KEY is also set - OpenRouter takes priority');
   } catch (err) {
