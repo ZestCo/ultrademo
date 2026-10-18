@@ -50,7 +50,7 @@ export default {
   //   //   busy, text-dense screens prefer a background: 'pill' or 'bar')
   //   //   | 'pill' (dark chip) | 'bar' (full-width lower third)
   //   // size: 'sm' | 'md' | 'lg'; position: 'bottom' | 'top'
-  //   // highlight (karaoke, ElevenLabs voice only): 'dim' (active word bright,
+  //   // highlight (karaoke, ElevenLabs or OpenRouter voice): 'dim' (active word bright,
   //   //   rest dimmed) | 'pill' (brand chip under active word) | 'wipe' (accent
   //   //   sweeps across each word as spoken - recommended with ElevenLabs).
   //   //   Free voices ignore it and stay static.

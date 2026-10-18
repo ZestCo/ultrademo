@@ -31,6 +31,7 @@ const SIMILARITY = process.env.ELEVENLABS_SIMILARITY ?? '0.75';
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY?.trim();
 const OPENROUTER_MODEL = process.env.OPENROUTER_TTS_MODEL || 'google/gemini-3.1-flash-tts-preview';
 const OPENROUTER_VOICE = process.env.OPENROUTER_TTS_VOICE || 'Gacrux';
+const OPENROUTER_TIMING = process.env.OPENROUTER_TIMING_MODEL || 'fish-audio/transcribe-1'; // 'off' = no word timings
 const OPENROUTER_STYLE = process.env.OPENROUTER_TTS_STYLE?.trim() ?? '';
 
 const args = process.argv.slice(2);
@@ -182,8 +183,8 @@ const macSay = (text, outFile) => {
 
 // OpenRouter's speech endpoint (Gemini TTS by default). Gemini only returns raw
 // PCM and ignores the `instructions` field, so an optional style goes in the
-// input as a labelled direction, and ffmpeg encodes the mp3. No word timings,
-// so captions stay static. Any failure throws: never write silent audio.
+// input as a labelled direction, and ffmpeg encodes the mp3. Word timings come
+// from a second pass (openrouterWords). Any failure throws: never write silent audio.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const openrouterError = async (res) => {
   const body = await res.text();
@@ -252,9 +253,94 @@ const openrouter = async (text, outFile) => {
       {input: pcm},
     );
     renameSync(tmp, outFile);
-    return null;
+    return openrouterWords(text, outFile);
   }
   throw new Error(`${problem} (gave up after 4 attempts)`);
+};
+
+// Map transcript timings onto the script's own tokens (whitespace-split, quotes
+// and punctuation kept, as the ElevenLabs alignment produces). Matching is per
+// character, so a misheard ("Zesk") or merged ("ZestDesk") word still lines up;
+// tokens with no match share the gap between their neighbours.
+const alignWords = (script, heard) => {
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const tokens = script.split(/\s+/).filter(Boolean);
+  const a = [];
+  const owner = [];
+  tokens.forEach((tok, i) => {
+    for (const c of norm(tok)) (a.push(c), owner.push(i));
+  });
+  const b = [];
+  const span = [];
+  for (const h of heard) {
+    const cs = [...norm(h.word ?? '')];
+    const step = (h.end - h.start) / Math.max(1, cs.length);
+    cs.forEach((c, k) => (b.push(c), span.push([h.start + step * k, h.start + step * (k + 1)])));
+  }
+  const n = a.length;
+  const m = b.length;
+  const d = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
+  for (let i = 0; i <= n; i++) d[i][0] = i;
+  for (let j = 0; j <= m; j++) d[0][j] = j;
+  for (let i = 1; i <= n; i++)
+    for (let j = 1; j <= m; j++)
+      d[i][j] = Math.min(d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), d[i - 1][j] + 1, d[i][j - 1] + 1);
+  const words = tokens.map((w) => ({w, start: null, end: null}));
+  let matched = 0;
+  for (let i = n, j = m; i > 0 && j > 0; ) {
+    const same = a[i - 1] === b[j - 1];
+    if (d[i][j] === d[i - 1][j - 1] + (same ? 0 : 1)) {
+      const w = words[owner[i - 1]];
+      const [s, e] = span[j - 1];
+      w.start = w.start === null ? s : Math.min(w.start, s);
+      w.end = w.end === null ? e : Math.max(w.end, e);
+      matched += same;
+      i--, j--;
+    } else if (d[i][j] === d[i - 1][j] + 1) i--;
+    else j--;
+  }
+  if (matched < n * 0.6) return null; // transcript doesn't resemble the script
+  for (let i = 0; i < words.length; ) {
+    if (words[i].start !== null) {
+      i++;
+      continue;
+    }
+    let k = i;
+    while (k < words.length && words[k].start === null) k++;
+    const from = words[i - 1]?.end ?? 0;
+    const to = Math.max(from, words[k]?.start ?? from + 0.3 * (k - i));
+    const step = (to - from) / (k - i);
+    for (let x = i; x < k; x++) Object.assign(words[x], {start: from + step * (x - i), end: from + step * (x - i + 1)});
+    i = k;
+  }
+  return words.map(({w, start, end}) => ({w, start: +start.toFixed(3), end: +end.toFixed(3)}));
+};
+
+// Karaoke timings for OpenRouter voices: transcribe the finished clip with word
+// timestamps (OPENROUTER_TIMING_MODEL) and align them to the script. A failure
+// here only costs the karaoke effect for that line, so it warns, never throws.
+const openrouterWords = async (text, file) => {
+  if (OPENROUTER_TIMING === 'off') return null;
+  const form = new FormData();
+  form.append('model', OPENROUTER_TIMING);
+  form.append('response_format', 'verbose_json');
+  form.append('timestamp_granularities[]', 'word');
+  form.append('file', new Blob([readFileSync(file)], {type: 'audio/mpeg'}), path.basename(file));
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {Authorization: `Bearer ${OPENROUTER_KEY}`},
+      body: form,
+    });
+    if (!res.ok) throw new Error(`${OPENROUTER_TIMING} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const heard = (await res.json()).words;
+    const words = heard?.length ? alignWords(text, heard) : null;
+    if (!words) throw new Error(`${OPENROUTER_TIMING} returned no usable word timings`);
+    return words;
+  } catch (err) {
+    console.warn(`  no word timings (${err.cause?.code ?? err.message}) - captions stay static for this line`);
+    return null;
+  }
 };
 
 const synth = {openrouter, elevenlabs, piper, say: macSay}[engine];
@@ -295,6 +381,11 @@ for (const {id, obj: scene} of units) {
     else rmSync(wordsFile, {force: true}); // drop stale timings if the voice changed
   } else if (existsSync(wordsFile)) {
     words = JSON.parse(readFileSync(wordsFile, 'utf8'));
+  } else if (engine === 'openrouter') {
+    // voiced before timings existed (or the timing pass failed): add them
+    // without re-voicing, so the line's audio is never re-billed
+    words = await openrouterWords(scene.script, outFile);
+    if (words) await writeFile(wordsFile, JSON.stringify(words));
   }
 
   scene.audio = rel;
