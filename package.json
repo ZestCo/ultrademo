@@ -7,7 +7,7 @@
   "homepage": "https://ultrademo.net",
   "type": "module",
   "scripts": {
-    "doctor": "node scripts/doctor.mjs",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
     "capture": "node capture/capture.mjs",
     "tts": "node --env-file-if-exists=.env tts/tts.mjs",
     "render": "node scripts/render.mjs",

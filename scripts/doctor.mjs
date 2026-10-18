@@ -54,17 +54,68 @@ try {
 } catch {
   /* not installed */
 }
-if (process.env.ELEVENLABS_API_KEY) {
+
+// OpenRouter: the key works, the account has credit, the model exists, and a
+// one-word test line voices with the configured voice (a fraction of a cent).
+const checkOpenRouter = async (key) => {
+  const model = process.env.OPENROUTER_TTS_MODEL || 'google/gemini-3.1-flash-tts-preview';
+  const voice = process.env.OPENROUTER_TTS_VOICE || 'Gacrux';
+  const api = (p, init = {}) =>
+    fetch(`https://openrouter.ai/api/v1/${p}`, {
+      ...init,
+      headers: {Authorization: `Bearer ${key}`, 'Content-Type': 'application/json'},
+    });
+  const why = async (res) => {
+    const body = await res.text();
+    try {
+      return `${res.status}: ${JSON.parse(body).error?.message}`;
+    } catch {
+      return `${res.status}: ${body.slice(0, 200)}`;
+    }
+  };
+  try {
+    const keyRes = await api('key');
+    if (!keyRes.ok)
+      return bad(`OPENROUTER_API_KEY rejected (${await why(keyRes)})`, 'paste a valid key from https://openrouter.ai/settings/keys into .env');
+    const keyLeft = (await keyRes.json()).data?.limit_remaining; // null = no per-key limit
+    const credits = await api('credits');
+    const acct = credits.ok ? (await credits.json()).data : null;
+    const left = Math.min(keyLeft ?? Infinity, acct ? acct.total_credits - acct.total_usage : Infinity);
+    if (left <= 0)
+      return bad('OpenRouter has no credit left for this key', 'top up at https://openrouter.ai/settings/credits (or raise the key limit)');
+    ok('OPENROUTER_API_KEY set', `narration will use OpenRouter${Number.isFinite(left) ? `, $${left.toFixed(2)} credit left` : ''}`);
+
+    if ((await api(`models/${model}/endpoints`)).status === 404)
+      return bad(`OPENROUTER_TTS_MODEL ${model} not found`, 'pick a speech model at https://openrouter.ai/models?output_modalities=speech');
+    const test = await api('audio/speech', {
+      method: 'POST',
+      body: JSON.stringify({model, voice, input: 'Test.', response_format: 'pcm'}),
+    });
+    if (test.ok && test.headers.get('content-type')?.startsWith('audio/')) ok('OpenRouter voice', `${voice} on ${model}`);
+    else bad(`OpenRouter could not voice a test line with ${voice} on ${model} (${await why(test)})`, 'set OPENROUTER_TTS_VOICE in .env to a voice this model supports (see README)');
+    if (process.env.OPENROUTER_TTS_STYLE) info(`style direction: ${process.env.OPENROUTER_TTS_STYLE}`);
+    if (process.env.ELEVENLABS_API_KEY) info('ELEVENLABS_API_KEY is also set - OpenRouter takes priority');
+  } catch (err) {
+    bad(`could not reach openrouter.ai (${err.cause?.code ?? err.message})`, 'check your internet connection or proxy');
+  }
+};
+
+const openrouterKey = process.env.OPENROUTER_API_KEY?.trim();
+if (openrouterKey) {
+  await checkOpenRouter(openrouterKey);
+} else if (process.env.ELEVENLABS_API_KEY) {
   ok('ELEVENLABS_API_KEY set', 'narration will use ElevenLabs');
+} else if (openrouterKey === '') {
+  bad('OPENROUTER_API_KEY is empty in .env', 'paste your key from https://openrouter.ai/settings/keys, or delete the line to use Piper/say');
 } else if (hasPiper) {
   ok('piper installed', 'free offline narration; set ELEVENLABS_API_KEY in .env for premium voice');
 } else if (process.platform === 'darwin') {
-  info('no ELEVENLABS_API_KEY and no piper - narration falls back to the macOS `say` placeholder voice.');
-  info('  better free option: pip install piper-tts · premium: ELEVENLABS_API_KEY=... in .env');
+  info('no OPENROUTER_API_KEY, no ELEVENLABS_API_KEY and no piper - narration falls back to the macOS `say` placeholder voice.');
+  info('  better free option: pip install piper-tts · premium: OPENROUTER_API_KEY=... or ELEVENLABS_API_KEY=... in .env');
 } else {
   bad(
-    'no voice available (no ELEVENLABS_API_KEY, no piper, no macOS say)',
-    'pip install piper-tts  (free, offline)  or add ELEVENLABS_API_KEY=... to .env',
+    'no voice available (no OPENROUTER_API_KEY, no ELEVENLABS_API_KEY, no piper, no macOS say)',
+    'pip install piper-tts  (free, offline)  or add OPENROUTER_API_KEY=... or ELEVENLABS_API_KEY=... to .env',
   );
 }
 
