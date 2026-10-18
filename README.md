@@ -2,6 +2,8 @@
 
 Point your AI Agent at your web app and get a narrated demo video. Everything runs on **your** machine: your credentials, your data, and your renders never leave it.
 
+> **Zest fork** of [new-xp/ultrademo](https://github.com/new-xp/ultrademo). It adds an OpenRouter narration voice - see [Narration via OpenRouter](#narration-via-openrouter). Install commands below point at this fork, so the skill and its workspace both use this code.
+
 ## See it work
 
 ![Ultrademo output: building a project tracker in Notion, captured and narrated automatically](docs/notion-tracker-2026-07-10.gif)
@@ -17,15 +19,15 @@ Ultrademo is a capture-and-render pipeline plus a Claude Code skill that drives 
 - Node 20+ (22 recommended), macOS / Linux / Windows
 - ffmpeg + ffprobe (`brew install ffmpeg` / `apt install ffmpeg` / `winget install ffmpeg`)
 - Chromium for Playwright (`npx playwright install chromium`)
-- A voice, best-first: an [ElevenLabs](https://elevenlabs.io) API key in `.env` (premium) → [Piper](https://github.com/rhasspy/piper) (`pip install piper-tts` - free, offline, all platforms) → macOS `say` (zero-install placeholder). Unchanged narration lines are cached, so re-renders never re-bill your ElevenLabs quota.
+- A voice, best-first: an [OpenRouter](https://openrouter.ai) API key in `.env` (see [below](#narration-via-openrouter)) → an [ElevenLabs](https://elevenlabs.io) API key in `.env` (premium) → [Piper](https://github.com/rhasspy/piper) (`pip install piper-tts` - free, offline, all platforms) → macOS `say` (zero-install placeholder). Unchanged narration lines are cached, so re-renders never re-bill your ElevenLabs quota.
 
 ## Install
 
 **Recommended - install the skill:**
 
 ```bash
-npx skills add new-xp/ultrademo          # pick YOUR agent when prompted
-npx skills add new-xp/ultrademo -a claude-code   # or skip the prompt (Claude Code)
+npx skills add ZestCo/ultrademo          # pick YOUR agent when prompted
+npx skills add ZestCo/ultrademo -a claude-code   # or skip the prompt (Claude Code)
 ```
 
 One command, either form. **In the agent picker, choose the agent you actually use** (Claude Code, Codex, Cursor, OpenCode, Windsurf, ...) - the "universal" option installs to `.agents/skills/`, a shared location some agents (including Claude Code today) don't scan, so the skill silently never shows up.
@@ -40,18 +42,18 @@ claude               # or your agent of choice
 
 On first run the skill provisions the pipeline for you - clones this repo into `ultrademo-workspace/`, runs `npm ci` (lockfile-exact) and `playwright install`, creates `.env`, and verifies your environment - then scouts your app, drafts a scene-by-scene script for your sign-off, captures, and renders.
 
-**Skill not showing up?** (`/ultrademo` unknown, or your agent doesn't list it): it almost certainly landed in `.agents/skills/` from the "universal" picker choice. Re-run the install with your agent named explicitly (`npx skills add new-xp/ultrademo -a claude-code`), or move the `ultrademo` and `ultrademo-rerun` folders into `.claude/skills/` yourself.
+**Skill not showing up?** (`/ultrademo` unknown, or your agent doesn't list it): it almost certainly landed in `.agents/skills/` from the "universal" picker choice. Re-run the install with your agent named explicitly (`npx skills add ZestCo/ultrademo -a claude-code`), or move the `ultrademo` and `ultrademo-rerun` folders into `.claude/skills/` yourself.
 
 Built and tested with Claude Code; any agent that reads `AGENTS.md` can follow the same playbook. Gemini CLI looks for `GEMINI.md` by default, so set its `contextFileName` to `AGENTS.md` (or copy the file).
 
 **Or set up the workspace yourself** (no skill CLI, or you just want the pipeline):
 
 ```bash
-git clone https://github.com/new-xp/ultrademo ultrademo-workspace && cd ultrademo-workspace
+git clone https://github.com/ZestCo/ultrademo ultrademo-workspace && cd ultrademo-workspace
 npm ci
 npx playwright install chromium
 npm run doctor                 # verifies your environment
-cp .env.example .env           # optional: add ELEVENLABS_API_KEY for premium narration
+cp .env.example .env           # add OPENROUTER_API_KEY (or ELEVENLABS_API_KEY) for narration
 ```
 
 With the folder open in Claude Code (or another AGENTS.md-aware agent), just ask for a demo video. Prefer to drive it by hand? See **Manually** below.
@@ -70,6 +72,54 @@ npm run render -- <project> --no-captions  # finalized video without burned-in c
 npm run render -- <project> --stems      # editor-ready stems (clean video, narration.mp3, captions.srt) + the finalized video
 npm run studio                       # scrubbable preview
 ```
+
+## Narration via OpenRouter
+
+This fork can voice narration through [OpenRouter](https://openrouter.ai)'s speech endpoint, using Google's Gemini TTS by default. One OpenRouter account pays for it, with no separate ElevenLabs subscription.
+
+**Setup**
+
+1. Create a key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys), and add credit to the account. A 30-second demo costs well under a cent.
+2. Open `.env` in the workspace (the skill creates it from `.env.example` on first run, or run `cp .env.example .env`), and paste the key after `OPENROUTER_API_KEY=`.
+3. Run `npm run doctor`. It checks that the key works, that the account has credit, that the model exists, and that the voice can say a one-word test line. That test line costs a fraction of a cent.
+
+From then on `npm run tts -- <project>` uses OpenRouter and prints `TTS: OpenRouter (<model>, voice <voice>)`.
+
+**`.env` keys**
+
+| Key | Default | What it does |
+|---|---|---|
+| `OPENROUTER_API_KEY` | - | Turns OpenRouter on. When it is set, it is used ahead of ElevenLabs, Piper and `say`. |
+| `OPENROUTER_TTS_MODEL` | `google/gemini-3.1-flash-tts-preview` | Speech model. It must return raw PCM, as Gemini TTS does. |
+| `OPENROUTER_TTS_VOICE` | `Gacrux` | The voice. |
+| `OPENROUTER_TTS_STYLE` | (none) | Optional delivery direction in plain words, e.g. `Calm, friendly British narrator, unhurried.` |
+
+If the `OPENROUTER_API_KEY=` line is there but empty, `npm run tts` stops and asks for the key. It does not fall back to the robotic placeholder voice. To use the free Piper or `say` voice instead, delete the line.
+
+**Changing the voice**
+
+Set `OPENROUTER_TTS_VOICE` in `.env` to another Gemini voice name. Zest has used `Gacrux` (mature, the default), `Charon` (drier and more informative), `Enceladus` (breathy and soft), `Puck` (upbeat) and `Iapetus` (clear). Google lists the full set under [Gemini TTS voice options](https://ai.google.dev/gemini-api/docs/speech-generation#voices). Then:
+
+```bash
+npm run doctor                      # confirms the new voice works
+npm run tts -- <project>            # re-voices every line once (the voice is part of the cache key)
+npm run render -- <project>
+```
+
+Use `OPENROUTER_TTS_STYLE` to adjust tone and accent. Keep the direction to a sentence or two, because long directions sometimes get read aloud. If a take runs far longer than its line, `tts` retries it and then stops with an error. Changing the model, voice or style re-voices all lines. Editing one narration line re-voices only that line, and unchanged lines come from the cache and are never re-billed.
+
+**Errors.** A bad key, an account with no credit, an unknown model or voice, or an API failure that persists after retries stops `npm run tts`. The message names the failing scene and its line, for example:
+
+```
+TTS failed on line "s3-reports": Reports track how many tickets ...
+  OpenRouter account is out of credit (402: ...) - top up at https://openrouter.ai/settings/credits
+```
+
+No audio file is written for a failed line. If the API returns silent audio, that counts as a failure. Fix the problem and run the same command again; lines voiced before the failure are already cached.
+
+Karaoke word-highlight captions need per-word timings, and only ElevenLabs provides them. With OpenRouter, captions are static, as they are with Piper.
+
+**Keeping the fork current:** `git remote add upstream https://github.com/new-xp/ultrademo`, then `git fetch upstream && git merge upstream/main` and push. The OpenRouter changes are kept small (`tts/tts.mjs`, `scripts/doctor.mjs`, `.env.example`, the doctor script in `package.json`, this section, and the repo URL in the skill and install lines), so upstream updates should merge cleanly.
 
 ## What a flow can do
 

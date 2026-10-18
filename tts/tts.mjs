@@ -3,9 +3,11 @@
 // its duration with ffprobe, and writes audio/audioDuration back into the
 // storyboard.
 //
-// Voice chain: ElevenLabs (ELEVENLABS_API_KEY in .env) -> Piper if installed
-// (free, offline, cross-platform: `pip install piper-tts`) -> macOS `say`
-// placeholder -> error with install instructions.
+// Voice chain: OpenRouter (OPENROUTER_API_KEY in .env) -> ElevenLabs
+// (ELEVENLABS_API_KEY in .env) -> Piper if installed (free, offline,
+// cross-platform: `pip install piper-tts`) -> macOS `say` placeholder -> error
+// with install instructions. An OPENROUTER_API_KEY= line left empty stops with
+// a reminder instead of falling back to a free voice.
 //
 // Unchanged lines are cached: each clip stores a signature of (engine, voice,
 // text); re-runs only synthesize scenes whose script or voice changed, so
@@ -15,7 +17,7 @@
 
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {existsSync, readFileSync, rmSync} from 'node:fs';
+import {existsSync, readFileSync, renameSync, rmSync} from 'node:fs';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +28,10 @@ const API_KEY = process.env.ELEVENLABS_API_KEY;
 const PIPER_MODEL = process.env.PIPER_MODEL ?? 'en_US-lessac-medium';
 const STABILITY = process.env.ELEVENLABS_STABILITY ?? '0.45';
 const SIMILARITY = process.env.ELEVENLABS_SIMILARITY ?? '0.75';
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY?.trim();
+const OPENROUTER_MODEL = process.env.OPENROUTER_TTS_MODEL || 'google/gemini-3.1-flash-tts-preview';
+const OPENROUTER_VOICE = process.env.OPENROUTER_TTS_VOICE || 'Gacrux';
+const OPENROUTER_STYLE = process.env.OPENROUTER_TTS_STYLE?.trim() ?? '';
 
 const args = process.argv.slice(2);
 const project = args.find((a) => !a.startsWith('--'));
@@ -50,31 +56,47 @@ const hasPiper = (() => {
   }
 })();
 
-const engine = API_KEY
-  ? 'elevenlabs'
-  : hasPiper
-    ? 'piper'
-    : process.platform === 'darwin'
-      ? 'say'
-      : null;
+const engine = OPENROUTER_KEY
+  ? 'openrouter'
+  : API_KEY
+    ? 'elevenlabs'
+    : hasPiper
+      ? 'piper'
+      : process.platform === 'darwin'
+        ? 'say'
+        : null;
+
+// The OPENROUTER_API_KEY= line is there but empty (fresh copy of .env.example):
+// stop rather than quietly narrate with a placeholder voice.
+if (OPENROUTER_KEY === '' && engine !== 'elevenlabs') {
+  console.error(
+    `OPENROUTER_API_KEY is empty in ${path.resolve('.env')}\n` +
+      '  - paste your key from https://openrouter.ai/settings/keys after the =, or\n' +
+      '  - delete that line to use the free Piper/say voice instead.',
+  );
+  process.exit(1);
+}
 
 if (!engine) {
   console.error(
     'No voice available. Either:\n' +
-      '  - add ELEVENLABS_API_KEY=... to a .env file in this folder, or\n' +
+      '  - add OPENROUTER_API_KEY=... or ELEVENLABS_API_KEY=... to a .env file in this folder, or\n' +
       '  - install Piper (free, offline): pip install piper-tts',
   );
   process.exit(1);
 }
 
 const voiceSig =
-  engine === 'elevenlabs'
-    ? `elevenlabs:${VOICE_ID}:${MODEL_ID}:${STABILITY}:${SIMILARITY}`
-    : engine === 'piper'
-      ? `piper:${PIPER_MODEL}`
-      : 'say';
+  engine === 'openrouter'
+    ? `openrouter:${OPENROUTER_MODEL}:${OPENROUTER_VOICE}:${OPENROUTER_STYLE}`
+    : engine === 'elevenlabs'
+      ? `elevenlabs:${VOICE_ID}:${MODEL_ID}:${STABILITY}:${SIMILARITY}`
+      : engine === 'piper'
+        ? `piper:${PIPER_MODEL}`
+        : 'say';
 
 const labels = {
+  openrouter: `OpenRouter (${OPENROUTER_MODEL}, voice ${OPENROUTER_VOICE})`,
   elevenlabs: `ElevenLabs (voice ${VOICE_ID})`,
   piper: `Piper (${PIPER_MODEL}, offline)`,
   say: 'macOS say fallback (placeholder voice)',
@@ -158,7 +180,84 @@ const macSay = (text, outFile) => {
   return null;
 };
 
-const synth = {elevenlabs, piper, say: macSay}[engine];
+// OpenRouter's speech endpoint (Gemini TTS by default). Gemini only returns raw
+// PCM and ignores the `instructions` field, so an optional style goes in the
+// input as a labelled direction, and ffmpeg encodes the mp3. No word timings,
+// so captions stay static. Any failure throws: never write silent audio.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const openrouterError = async (res) => {
+  const body = await res.text();
+  let msg = body.slice(0, 300);
+  try {
+    msg = JSON.parse(body).error?.message ?? msg;
+  } catch {
+    /* not JSON */
+  }
+  if (res.status === 401) return `OpenRouter rejected OPENROUTER_API_KEY (401: ${msg}) - check the key in .env`;
+  if (res.status === 402)
+    return `OpenRouter account is out of credit (402: ${msg}) - top up at https://openrouter.ai/settings/credits`;
+  if (res.status === 400 || res.status === 404)
+    return `OpenRouter ${res.status}: ${msg} - check OPENROUTER_TTS_MODEL (${OPENROUTER_MODEL}) and OPENROUTER_TTS_VOICE (${OPENROUTER_VOICE}) in .env`;
+  return `OpenRouter ${res.status}: ${msg}`;
+};
+
+const openrouter = async (text, outFile) => {
+  const input = OPENROUTER_STYLE
+    ? 'Read the transcript aloud. Speak only the transcript, never the direction.\n\n' +
+      `DIRECTION: ${OPENROUTER_STYLE}\n\nTRANSCRIPT: ${text}`
+    : text;
+  const maxSeconds = 3 + 1.5 * text.split(/\s+/).length; // longer = the direction was read aloud
+  let problem = '';
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (attempt > 1) await sleep(1000 * 2 ** (attempt - 1));
+    let res;
+    try {
+      res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+        method: 'POST',
+        headers: {Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({model: OPENROUTER_MODEL, voice: OPENROUTER_VOICE, input, response_format: 'pcm'}),
+      });
+    } catch (err) {
+      problem = `could not reach openrouter.ai (${err.cause?.code ?? err.message})`;
+      continue;
+    }
+    const type = res.headers.get('content-type') ?? '';
+    if (!res.ok || !type.startsWith('audio/')) {
+      problem = await openrouterError(res);
+      // bad key / no credit / unknown model won't fix themselves; anything else
+      // (rate limits, provider hiccups, Gemini's occasional 400) gets a retry
+      if ([401, 402, 403, 404].includes(res.status)) throw new Error(problem);
+      continue;
+    }
+    const pcm = Buffer.from(await res.arrayBuffer());
+    const rate = Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000);
+    const seconds = pcm.length / 2 / rate;
+    let peak = 0;
+    for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
+    if (seconds < 0.3 || peak < 500) {
+      problem = `OpenRouter returned silent audio (${seconds.toFixed(1)}s)`;
+      continue;
+    }
+    if (seconds > maxSeconds) {
+      problem = `audio ran ${seconds.toFixed(1)}s for a ${maxSeconds.toFixed(0)}s-max line - the style direction was likely read aloud; shorten OPENROUTER_TTS_STYLE`;
+      continue;
+    }
+    // same mp3 as the ElevenLabs path (44.1kHz, 128k); encode beside the target
+    // and rename, so a failed encode never leaves a broken clip
+    const tmp = outFile.replace(/\.mp3$/, '.tmp.mp3');
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-loglevel', 'error', '-f', 's16le', '-ar', String(rate), '-ac', '1', '-i', 'pipe:0',
+        '-ar', '44100', '-b:a', '128k', tmp],
+      {input: pcm},
+    );
+    renameSync(tmp, outFile);
+    return null;
+  }
+  throw new Error(`${problem} (gave up after 4 attempts)`);
+};
+
+const synth = {openrouter, elevenlabs, piper, say: macSay}[engine];
 
 // Narratable units: every scene, plus the intro/outro slides when they carry a
 // script (the renderer starts slide audio slightly after the card appears and
@@ -182,7 +281,15 @@ for (const {id, obj: scene} of units) {
 
   let words = null;
   if (!cached) {
-    words = await synth(scene.script, outFile);
+    try {
+      words = await synth(scene.script, outFile);
+    } catch (err) {
+      console.error(
+        `\nTTS failed on line "${id}": ${scene.script}\n  ${err.message}\n` +
+          'Lines voiced before it are cached; fix the problem and re-run the same command.',
+      );
+      process.exit(1);
+    }
     await writeFile(sigFile, sig);
     if (words) await writeFile(wordsFile, JSON.stringify(words));
     else rmSync(wordsFile, {force: true}); // drop stale timings if the voice changed
