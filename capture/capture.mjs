@@ -400,6 +400,7 @@ await writeFile(
       // Optional presentation metadata carried straight through to the renderer:
       // brand accent (#hex), caption style, and intro/outro title cards.
       ...(flow.brand ? {brand: flow.brand} : {}),
+      ...(flow.theme ? {theme: flow.theme} : {}), // brand profile: brands/<theme>/
       ...(flow.caption ? {caption: flow.caption} : {}),
       // Intro card defaults its screenshot to the first captured scene, so the
       // author can just write `intro: {title, subtitle}` without knowing paths.

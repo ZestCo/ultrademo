@@ -33,6 +33,11 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_TTS_MODEL || 'google/gemini-3.1-
 const OPENROUTER_VOICE = process.env.OPENROUTER_TTS_VOICE || 'Gacrux';
 const OPENROUTER_TIMING = process.env.OPENROUTER_TIMING_MODEL || 'fish-audio/transcribe-1'; // 'off' = no word timings
 const OPENROUTER_STYLE = process.env.OPENROUTER_TTS_STYLE?.trim() ?? '';
+// Delivery guidance via the API's `instructions` field - honoured by OpenAI TTS
+// (Gemini ignores it; use OPENROUTER_TTS_STYLE there).
+const OPENROUTER_INSTRUCTIONS = process.env.OPENROUTER_TTS_INSTRUCTIONS?.trim() ?? '';
+// Gemini TTS only returns raw PCM (24 kHz mono s16le); other models return mp3.
+const OPENROUTER_PCM = /^google\//.test(OPENROUTER_MODEL);
 
 const args = process.argv.slice(2);
 const project = args.find((a) => !a.startsWith('--'));
@@ -89,7 +94,7 @@ if (!engine) {
 
 const voiceSig =
   engine === 'openrouter'
-    ? `openrouter:${OPENROUTER_MODEL}:${OPENROUTER_VOICE}:${OPENROUTER_STYLE}`
+    ? `openrouter:${OPENROUTER_MODEL}:${OPENROUTER_VOICE}:${OPENROUTER_STYLE}:${OPENROUTER_INSTRUCTIONS}`
     : engine === 'elevenlabs'
       ? `elevenlabs:${VOICE_ID}:${MODEL_ID}:${STABILITY}:${SIMILARITY}`
       : engine === 'piper'
@@ -216,7 +221,13 @@ const openrouter = async (text, outFile) => {
       res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
         method: 'POST',
         headers: {Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json'},
-        body: JSON.stringify({model: OPENROUTER_MODEL, voice: OPENROUTER_VOICE, input, response_format: 'pcm'}),
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          voice: OPENROUTER_VOICE,
+          input,
+          response_format: OPENROUTER_PCM ? 'pcm' : 'mp3',
+          ...(OPENROUTER_INSTRUCTIONS ? {instructions: OPENROUTER_INSTRUCTIONS} : {}),
+        }),
       });
     } catch (err) {
       problem = `could not reach openrouter.ai (${err.cause?.code ?? err.message})`;
@@ -230,8 +241,15 @@ const openrouter = async (text, outFile) => {
       if ([401, 402, 403, 404].includes(res.status)) throw new Error(problem);
       continue;
     }
-    const pcm = Buffer.from(await res.arrayBuffer());
-    const rate = Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000);
+    const body = Buffer.from(await res.arrayBuffer());
+    // checks run on raw PCM; an mp3 reply is decoded for them and kept as sent
+    const pcm = OPENROUTER_PCM
+      ? body
+      : execFileSync('ffmpeg', ['-loglevel', 'error', '-i', 'pipe:0', '-f', 's16le', '-ac', '1', '-ar', '24000', 'pipe:1'], {
+          input: body,
+          maxBuffer: 1 << 28,
+        });
+    const rate = OPENROUTER_PCM ? Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000) : 24000;
     const seconds = pcm.length / 2 / rate;
     let peak = 0;
     for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
@@ -246,14 +264,16 @@ const openrouter = async (text, outFile) => {
     // same mp3 as the ElevenLabs path (44.1kHz, 128k); encode beside the target
     // and rename, so a failed encode never leaves a broken clip
     const tmp = outFile.replace(/\.mp3$/, '.tmp.mp3');
-    execFileSync(
-      'ffmpeg',
-      ['-y', '-loglevel', 'error', '-f', 's16le', '-ar', String(rate), '-ac', '1', '-i', 'pipe:0',
-        '-ar', '44100', '-b:a', '128k', tmp],
-      {input: pcm},
-    );
+    if (OPENROUTER_PCM)
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-loglevel', 'error', '-f', 's16le', '-ar', String(rate), '-ac', '1', '-i', 'pipe:0',
+          '-ar', '44100', '-b:a', '128k', tmp],
+        {input: pcm},
+      );
+    else await writeFile(tmp, body);
     renameSync(tmp, outFile);
-    return openrouterWords(text, outFile);
+    return null; // word timings are added by the caller (openrouterWords), against the script
   }
   throw new Error(`${problem} (gave up after 4 attempts)`);
 };
@@ -348,6 +368,18 @@ const synth = {openrouter, elevenlabs, piper, say: macSay}[engine];
 // Narratable units: every scene, plus the intro/outro slides when they carry a
 // script (the renderer starts slide audio slightly after the card appears and
 // holds the slide until the line finishes).
+// Optional projects/<project>/pronounce.json: {"IT": "I.T."} - whole-word,
+// case-sensitive substitutions applied to the SPOKEN text only, so captions
+// keep the on-screen spelling while the voice says it right.
+const pronouncePath = path.resolve('projects', project, 'pronounce.json');
+const pronounce = existsSync(pronouncePath) ? JSON.parse(readFileSync(pronouncePath, 'utf8')) : {};
+const escapeRe = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const spoken = (text) =>
+  Object.entries(pronounce).reduce(
+    (t, [from, to]) => t.replace(new RegExp(`(?<![\\w])${escapeRe(from)}(?![\\w])`, 'g'), to),
+    text,
+  );
+
 const units = [
   ...(storyboard.intro?.script ? [{id: 'intro-slide', obj: storyboard.intro}] : []),
   ...storyboard.scenes.map((scene) => ({id: scene.id, obj: scene})),
@@ -359,7 +391,7 @@ for (const {id, obj: scene} of units) {
   const outFile = path.join(assetsDir, rel);
   const sigFile = `${outFile}.sig`;
   const wordsFile = `${outFile}.words.json`; // per-word timings cached beside the audio
-  const sig = createHash('sha256').update(`${voiceSig}\n${scene.script}`).digest('hex');
+  const sig = createHash('sha256').update(`${voiceSig}\n${spoken(scene.script)}`).digest('hex');
 
   const force = redo.has('all') || redo.has(id);
   const cached =
@@ -368,7 +400,9 @@ for (const {id, obj: scene} of units) {
   let words = null;
   if (!cached) {
     try {
-      words = await synth(scene.script, outFile);
+      words = await synth(spoken(scene.script), outFile);
+      // OpenRouter timings are aligned to the script as written, not the spoken text
+      if (engine === 'openrouter') words = await openrouterWords(scene.script, outFile);
     } catch (err) {
       console.error(
         `\nTTS failed on line "${id}": ${scene.script}\n  ${err.message}\n` +
