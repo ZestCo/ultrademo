@@ -1,7 +1,16 @@
 // Environment check: verifies everything the pipeline needs, with fix hints.
 // Usage: npm run doctor
 import {execFileSync} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
+
+// Load .env here rather than with `node --env-file-if-exists`, so doctor still
+// starts on a Node too old for that flag and can say so. Shell values win.
+if (existsSync('.env')) {
+  for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+}
 
 let failed = false;
 const ok = (label, detail = '') => console.log(`  ✓ ${label}${detail ? ` (${detail})` : ''}`);
@@ -14,9 +23,21 @@ const info = (label) => console.log(`  · ${label}`);
 console.log('ultrademo doctor\n');
 
 // Node
-const major = Number(process.versions.node.split('.')[0]);
-if (major >= 20) ok('node', `v${process.versions.node}`);
-else bad(`node v${process.versions.node} is too old`, 'install Node 20+ (22 recommended)');
+// `npm run tts` needs --env-file-if-exists, so try the flag rather than guess from a version.
+const envFileFlag = (() => {
+  try {
+    execFileSync(process.execPath, ['--env-file-if-exists=.env.none', '-e', ''], {stdio: 'ignore'});
+    return true;
+  } catch {
+    return false;
+  }
+})();
+if (envFileFlag) ok('node', `v${process.versions.node}`);
+else
+  bad(
+    `node v${process.versions.node} is too old (npm run tts needs --env-file-if-exists)`,
+    'nvm install && nvm use  (this folder\'s .nvmrc pins Node 22), then re-run npm run doctor',
+  );
 
 // ffmpeg / ffprobe
 for (const bin of ['ffmpeg', 'ffprobe']) {

@@ -35,7 +35,7 @@ const captionOverride = {
   theme: flagVal('caption-theme'),
   size: flagVal('caption-size'),
   position: flagVal('caption-position'),
-  highlight: flagVal('caption-highlight'), // dim|pill|wipe (ElevenLabs voices only)
+  highlight: flagVal('caption-highlight'), // dim|pill|wipe (ElevenLabs or OpenRouter voices)
   literalColor: flagVal('caption-literal-color'), // tint for double-quoted UI literals (default sky #7dd3fc)
 };
 const caption = Object.fromEntries(Object.entries(captionOverride).filter(([, v]) => v));

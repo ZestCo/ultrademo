@@ -210,7 +210,7 @@ Rules the skill enforces and manual users should follow: scout read-only; never 
 
 ## Security
 
-Scanned with [NVIDIA SkillSpector](https://github.com/NVIDIA/skillspector) - **0/100, SAFE** with the committed baseline. Every finding was triaged; the false positives (all heuristic matches on legitimate browser-automation and `.env` key-setup code) are documented with justifications in [`.skillspector-baseline.yaml`](.skillspector-baseline.yaml). Full write-up: [`SECURITY-SCAN.md`](SECURITY-SCAN.md). Reproduce with `skillspector scan . --no-llm --baseline .skillspector-baseline.yaml`.
+Scanned with [NVIDIA SkillSpector](https://github.com/NVIDIA/skillspector) - **0/100, SAFE** with the committed baseline (New XP's original; the Zest fork's additions are listed in [`SECURITY-SCAN.md`](SECURITY-SCAN.md) and its baseline needs regenerating for SkillSpector 2.x). Every finding was triaged; the false positives (all heuristic matches on legitimate browser-automation and `.env` key-setup code) are documented with justifications in [`.skillspector-baseline.yaml`](.skillspector-baseline.yaml). Full write-up: [`SECURITY-SCAN.md`](SECURITY-SCAN.md). Reproduce with `skillspector scan . --no-llm --baseline .skillspector-baseline.yaml`.
 
 ## License
 

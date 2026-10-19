@@ -32,7 +32,7 @@ export type CaptionStyle = {
   size?: 'sm' | 'md' | 'lg';
   position?: 'bottom' | 'top';
   accent?: string; // background/bar tint (hex)
-  // Karaoke word-highlight (needs per-word timings -> ElevenLabs voice only;
+  // Karaoke word-highlight (needs per-word timings -> ElevenLabs or OpenRouter voice;
   // free voices fall back to the static caption). Off unless set.
   highlight?: 'dim' | 'pill' | 'wipe';
   // Tint for double-quoted UI literals in the script. Deliberately NOT the
@@ -78,7 +78,7 @@ export type Scene = {
   action?: {type: 'click' | 'hover' | 'none'; x: number; y: number};
   audio?: string; // path under public/
   audioDuration?: number; // seconds, written by the tts step
-  words?: WordTiming[]; // per-word timings from ElevenLabs (karaoke captions)
+  words?: WordTiming[]; // per-word timings from ElevenLabs or OpenRouter (karaoke captions)
   durationHint?: number; // seconds, fallback when no audio
 };
 
@@ -306,7 +306,7 @@ const Caption: React.FC<{
   const edge = layout === 'vertical' ? 140 : 56;
   const outline = outlineStyle(fontSize);
   const literalColor = style.literalColor ?? LITERAL_DEFAULT;
-  // Word-highlight only when a style is set AND word timings exist (ElevenLabs).
+  // Word-highlight only when a style is set AND word timings exist (ElevenLabs/OpenRouter).
   const karaoke = style.highlight && words && words.length > 0;
 
   const box: React.CSSProperties =

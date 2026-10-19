@@ -7,6 +7,20 @@ This repository is scanned with [NVIDIA SkillSpector](https://github.com/NVIDIA/
 - **Result with the committed baseline:** **0/100 — SAFE**
 - **Reproduce:** `skillspector scan . --no-llm --baseline .skillspector-baseline.yaml`
 
+## Zest fork status (2026-10-19)
+
+The result above is New XP's scan of the original. It does not yet cover the Zest fork, and it can't be reproduced as written: SkillSpector 2.x now refuses this version-1 baseline ("unsupported baseline version 1; expected 2") and asks for a rescan and re-triage with `skillspector baseline`.
+
+A raw `--no-llm` scan on 2026-10-19 (no baseline) found 79 findings in the original and 84 in the fork. Every finding the fork adds is the same kind already triaged below as a false positive:
+
+| Rule | Where | Why it is a false positive |
+|---|---|---|
+| PE3 | `scripts/doctor.mjs`, `tts/tts.mjs` | Reading the user's own `OPENROUTER_API_KEY` from `.env`, and messages telling them where to paste it. |
+| E1 | `tts/tts.mjs` | Narration posted to OpenRouter's documented speech and transcription endpoints with the user's own opt-in key, as the ElevenLabs path already does. |
+| AST4 | `scripts/sync-check.py` | `subprocess.run` with fixed argument lists (`node`, `ffmpeg`), no shell. |
+
+To do: regenerate the baseline in version-2 format with these justifications, then restore a reproducible clean result.
+
 ## How to read this
 
 A raw scan of any browser-automation tool trips a malware-oriented skill scanner, because the tool's legitimate job — drive a browser, sign in, read narration keys from a `.env` file, type into forms — pattern-matches the same heuristics used to catch credential theft. We did not silence the scanner or remove functionality to force a green result. Instead we triaged every finding, and the ones that are genuine false positives are recorded in [`.skillspector-baseline.yaml`](.skillspector-baseline.yaml) with a written justification each. That file is committed, so anyone can see exactly what was suppressed and why, and re-running the scan reproduces the clean result.
