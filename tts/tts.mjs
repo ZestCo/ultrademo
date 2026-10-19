@@ -164,7 +164,7 @@ const elevenlabs = async (text, outFile) => {
 };
 
 // Piper/say don't emit word timings, so they return null: captions stay static
-// on the free voices (karaoke word-highlight is an ElevenLabs-only feature).
+// on the free voices (karaoke word-highlight needs ElevenLabs or OpenRouter).
 const piper = (text, outFile) => {
   const wav = outFile.replace(/\.mp3$/, '.wav');
   const modelDir = path.join(os.homedir(), '.ultrademo', 'piper');
@@ -273,6 +273,19 @@ const openrouter = async (text, outFile) => {
         {input: pcm},
       );
     else await writeFile(tmp, body);
+    // With a style direction, also check the words: Gemini sometimes speaks the
+    // direction at a normal pace, which the duration check above can miss. The
+    // transcript is kept for the word timings, so this costs nothing extra.
+    if (OPENROUTER_STYLE && OPENROUTER_TIMING !== 'off') {
+      const heard = await transcribe(tmp).catch(() => null);
+      const said = text.split(/\s+/).filter(Boolean).length;
+      if (heard && heard.length > said + Math.max(3, said / 4)) {
+        rmSync(tmp, {force: true});
+        problem = `heard ${heard.length} words for a ${said}-word line - the style direction was read aloud; shorten OPENROUTER_TTS_STYLE`;
+        continue;
+      }
+      if (heard) heardCache.set(outFile, heard);
+    }
     renameSync(tmp, outFile);
     return null; // word timings are added by the caller (openrouterWords), against the script
   }
@@ -340,21 +353,27 @@ const alignWords = (script, heard) => {
 // Karaoke timings for OpenRouter voices: transcribe the finished clip with word
 // timestamps (OPENROUTER_TIMING_MODEL) and align them to the script. A failure
 // here only costs the karaoke effect for that line, so it warns, never throws.
-const openrouterWords = async (text, file) => {
-  if (OPENROUTER_TIMING === 'off') return null;
+const transcribe = async (file) => {
   const form = new FormData();
   form.append('model', OPENROUTER_TIMING);
   form.append('response_format', 'verbose_json');
   form.append('timestamp_granularities[]', 'word');
   form.append('file', new Blob([readFileSync(file)], {type: 'audio/mpeg'}), path.basename(file));
+  const res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {Authorization: `Bearer ${OPENROUTER_KEY}`},
+    body: form,
+  });
+  if (!res.ok) throw new Error(`${OPENROUTER_TIMING} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json()).words ?? null;
+};
+const heardCache = new Map(); // outFile -> words already transcribed during synthesis
+
+const openrouterWords = async (text, file) => {
+  if (OPENROUTER_TIMING === 'off') return null;
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {Authorization: `Bearer ${OPENROUTER_KEY}`},
-      body: form,
-    });
-    if (!res.ok) throw new Error(`${OPENROUTER_TIMING} ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const heard = (await res.json()).words;
+    const heard = heardCache.get(file) ?? (await transcribe(file));
+    heardCache.delete(file);
     const words = heard?.length ? alignWords(text, heard) : null;
     if (!words) throw new Error(`${OPENROUTER_TIMING} returned no usable word timings`);
     return words;
