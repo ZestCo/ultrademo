@@ -162,6 +162,15 @@ Never declare success unrendered-eyes: extract frames (`ffmpeg -ss <t> -i out/<p
 
 Present: the video path, duration, and per-scene check frames. Ask for scene-level notes. Apply fixes at the cheapest layer: narration edit = re-TTS + re-render (~2 min); zoom/order = re-render only; UI changed = re-capture that flow. Then finalize: offer the vertical and GIF variants.
 
+## Batch mode ("record these videos")
+
+When the user wants several videos made or refreshed, run them as a batch instead of one by one. Both gates still apply, per video: every script is signed off before its flow is captured, and every render is reviewed before it is called done.
+
+1. Write `projects/_batches/<batch>.json` listing the approved projects in recording order, each with its `target` length from the script.
+2. `npm run batch -- <batch> --dry-run` to show the plan, then `npm run batch -- <batch>`. It runs reset, seed, capture, tts, render, cleanup and QA per video and keeps going past failures. After narration-only edits use `--from tts`; one video only, `--only <project>`.
+3. Read the report (`projects/_batches/reports/<batch>-<time>.md`). For each video, look at `out/qa-sheet.jpg` yourself and sweep it for real names, secrets and wrong screens, as in Step 4. Fix fails and warnings at the cheapest layer, re-run just those videos, then present the batch for review: path, length, QA result and your own notes per video.
+4. If the workspace has a tracker (`projects/_batches/tracker.json` names its URL), update each video's row there with its status, length, QA notes and render path.
+
 ## Re-runs ("the UI changed")
 
 Same project folder, always: run `projects/<project>/reset.mjs`, then `capture → tts → render`. Unchanged narration is fully cached (a visual-only refresh re-bills nothing). Previous renders are auto-archived to `out/archive/` so the user gets a before/after pair. If the codebase is available, read the diff since the last capture first - it usually names the changed surface and broken selectors before you re-run anything. Then, by what the UI update did:
