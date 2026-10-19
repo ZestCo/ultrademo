@@ -11,6 +11,8 @@
     "capture": "node capture/capture.mjs",
     "tts": "node --env-file-if-exists=.env tts/tts.mjs",
     "render": "node scripts/render.mjs",
+    "qa": "node scripts/qa.mjs",
+    "batch": "node scripts/batch.mjs",
     "studio": "remotion studio render/src/index.ts",
     "login": "node scripts/login.mjs"
   },

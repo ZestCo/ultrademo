@@ -134,6 +134,27 @@ Everything lives in `brands/zest-yt/`: `brand.json` (colours, font, sting timing
 
 Helper scripts for tight narration timing: `node scripts/pre-tts.mjs <project>` writes a script-only storyboard so `npm run tts` can voice the lines before capture, `node scripts/phrases.mjs <project>` prints where each line's phrases fall, `node scripts/scene-times.mjs <project>` prints each scene's start time in the render, and `scripts/sync-check.py` builds a contact sheet of frames at given moments. Per-project `pronounce.json` (`{"IT": "I.T."}`) changes what the voice says without changing the captions.
 
+## Batches and automatic QA
+
+Record a whole list of videos unattended, then review them together:
+
+```bash
+npm run batch -- batch2                 # projects/_batches/batch2.json
+npm run batch -- batch2 --from tts      # after narration edits: re-voice and re-render, no re-recording
+npm run batch -- batch2 --only <project>
+npm run qa -- <project> [--target 1:30] # QA one rendered video on its own
+```
+
+A batch file lists projects in order, with an optional target length and extra render flags:
+
+```json
+{"name": "batch2", "videos": [{"project": "edv-export-tickets-2026-10-09-1424", "target": "1:30"}, "edv-create-tag-2026-10-09-1424"]}
+```
+
+For each video the runner does `reset.mjs` (clears leftovers), `seed.mjs`, capture, tts, render, `reset.mjs` again (cleanup) and QA. A failed step is logged to `out/batch.log`, cleanup still runs, and the batch moves on. The report lands in `projects/_batches/reports/<batch>-<time>.md` (and `.json`).
+
+QA (`out/qa.json`) checks the length against the target, that every line is voiced, karaoke word timings, clips running long past their narration, clips that froze mid-action, black frames, silent gaps over 4 seconds and audio levels. It also writes `out/qa-sheet.jpg`, one frame per scene in order, for the visual check: real names, secrets, wrong screens. Automatic QA never replaces watching the video before it goes out.
+
 ## What a flow can do
 
 Still scenes (screenshot + Ken Burns zoom), clip scenes (real recordings of typing, dialogs, transitions - with demo-paced actions, a synthetic cursor overlay, and `skipWhile()` jump-cuts over spinners), and phone-framed mobile scenes.
